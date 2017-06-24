@@ -112,7 +112,13 @@ jv_print_json () {
     message=${2//\"/\\\\\"} # escape double quotes
     message=${message//[$'\t']/    } # replace tabs with spaces
     message=${message//%/%%} # escape percentage chars for printf
-    printf "$jv_json_separator{\"$1\":\"${message}\"}"
+
+    if ! $jv_external_order; then
+        printf "$jv_json_separator{\"$1\":\"${message}\"}"
+    else
+        jv_external_order_response+="$jv_json_separator{\"$1\":\"${message}\"}"
+    fi
+
     jv_json_separator=","
 }
 

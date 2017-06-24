@@ -93,6 +93,10 @@ lockfile="$jv_cache_folder/jarvis.lock"
 audiofile="$jv_cache_folder/jarvis-record.wav"
 forder="$jv_cache_folder/jarvis-order"
 jv_say_queue="$jv_cache_folder/jarvis-say"
+jv_execute_queue="$jv_cache_folder/jarvis-execute"
+jv_response_queue="$jv_cache_folder/jarvis-response"
+jv_external_order=false
+jv_external_order_response=
 jv_store_file="$jv_cache_folder/jarvis-store.json"
 rm -f $audiofile # sometimes, when error, previous recording is played
 if [ ! -d "plugins_installed" ]; then
@@ -324,6 +328,7 @@ $jv_api || jv_hook "program_startup" # don't trigger program_* from api calls
 # Public: handle an order and execute corresponding command
 # 
 # $1 - order to recognize
+# $2 - Whether the order originates from the external orders queue
 #
 # Usage
 #
@@ -332,7 +337,9 @@ jv_handle_order() {
     local order=$1
     local sanitized="$(jv_sanitize "$order")"
 	local check_indented=false
-    
+
+    jv_external_order=$2
+
     if [ "$order" = "?" ]; then
         jv_display_commands
         return
@@ -383,6 +390,15 @@ jv_handle_order() {
         # jv_info "possible answers:"
         jv_debug "$(echo "$commands" | grep "^[^>]" | cut -d '=' -f 1 | pr -3 -l1 -t)"
     fi
+
+    if $jv_external_order; then
+        if $jv_possible_answers; then
+            # if in nested commands, save possible answer for next json call
+            echo -e "$commands" > $jv_cache_folder/jarvis-possible-answers
+        fi
+
+        echo $jv_external_order_response > $jv_response_queue
+    fi
 }
 
 # Internal:
@@ -412,6 +428,13 @@ if [ "$just_execute" = false ]; then
         [ -p $jv_say_queue ] || mkfifo $jv_say_queue # create pipe if not exists
         source utils/say.sh &
     fi
+
+    # start execute service, with associated response queue
+    if ! $jv_api; then
+        [ -p $jv_execute_queue ] || mkfifo $jv_execute_queue # create pipe if not exists
+        [ -p $jv_response_queue ] || mkfifo $jv_response_queue # create pipe if not exists
+        source utils/execute.sh &
+    fi
     
     # welcome phrase
     [ $just_listen = false ] && [ ! -z "$phrase_welcome" ] && say "$phrase_welcome"
@@ -435,8 +458,19 @@ else # just execute an order
         # indicate there are possible answers not to reset commands
         jv_possible_answers=true
     fi
-    # no need to say Jarvis if just execute
-    bypass=true
+
+    if jv_is_started; then
+        echo "$order" >> $jv_execute_queue # put in queue (read by execute.sh)
+    else
+        jv_error "ERROR: Jarvis is not running"
+        jv_success "HELP: Start Jarvis using jarvis -b"
+
+        jv_exit
+    fi
+
+    while read -r response; do
+        echo $response
+    done < $jv_response_queue
 fi
 
 while true; do
@@ -541,15 +575,4 @@ while true; do
     $bypass || jv_hook "exiting_cmd"
     #fi
     $just_listen && [ $bypass = false ] && jv_exit
-    if [ "$just_execute" != false ]; then
-        if $jv_possible_answers; then
-            if $jv_json; then
-                # if in nested commands, save possible answer for next json call
-                echo -e "$commands" > $jv_cache_folder/jarvis-possible-answers
-                jv_exit
-            fi
-        else # just execute but not pending answer, finished
-            jv_exit
-        fi
-    fi
 done
